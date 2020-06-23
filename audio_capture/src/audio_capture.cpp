@@ -3,6 +3,12 @@
 #include <gst/app/gstappsink.h>
 #include <boost/thread.hpp>
 
+//new code start -----------------
+#include <sensor_msgs/Joy.h>
+#include <std_msgs/Bool.h>
+#include <ros/console.h>
+//new code end -------------------
+
 #include <ros/ros.h>
 
 #include "audio_common_msgs/AudioData.h"
@@ -15,6 +21,9 @@ namespace audio_transport
       RosGstCapture()
       {
         _bitrate = 192;
+
+        //Set button pressed to FALSE
+        button_is_pressed = false;
 
         std::string dst_type;
 
@@ -38,6 +47,9 @@ namespace audio_transport
         ros::param::param<std::string>("~device", device, "");
 
         _pub = _nh.advertise<audio_common_msgs::AudioData>("audio", 10, true);
+        //Initialize subscriber that listens to the joy topic to see if the
+        //button on the joystick is pressed
+        button_sub = _nh.subscribe("/joy", 10, &RosGstCapture::JoyCallback, this);
 
         _loop = g_main_loop_new(NULL, false);
         _pipeline = gst_pipeline_new("ros_pipeline");
@@ -116,16 +128,10 @@ namespace audio_transport
                                      "signed",   G_TYPE_BOOLEAN, TRUE,
                                      NULL);
 
-          if (dst_type == "appsink") {
-            g_object_set( G_OBJECT(_sink), "caps", caps, NULL);
-            gst_caps_unref(caps);
-            gst_bin_add_many( GST_BIN(_pipeline), _source, _sink, NULL);
-            link_ok = gst_element_link_many( _source, _sink, NULL);
-          } else {
-            _filter = gst_element_factory_make("wavenc", "filter");
-            gst_bin_add_many( GST_BIN(_pipeline), _source, _filter, _sink, NULL);
-            link_ok = gst_element_link_many( _source, _filter, _sink, NULL);
-          }
+          g_object_set( G_OBJECT(_sink), "caps", caps, NULL);
+          gst_caps_unref(caps);
+          gst_bin_add_many( GST_BIN(_pipeline), _source, _sink, NULL);
+          link_ok = gst_element_link_many( _source, _sink, NULL);
         } else {
           ROS_ERROR_STREAM("format must be \"wave\" or \"mp3\"");
           exitOnMainThread(1);
@@ -181,6 +187,7 @@ namespace audio_transport
         GstBuffer *buffer = gst_sample_get_buffer(sample);
 
         audio_common_msgs::AudioData msg;
+
         gst_buffer_map(buffer, &map, GST_MAP_READ);
         msg.data.resize( map.size );
 
@@ -188,6 +195,7 @@ namespace audio_transport
 
         gst_buffer_unmap(buffer, &map);
         gst_sample_unref(sample);
+
 
         server->publish(msg);
 
@@ -209,9 +217,20 @@ namespace audio_transport
         return FALSE;
       }
 
+      void JoyCallback(const sensor_msgs::Joy::ConstPtr& joy){
+        button_is_pressed = joy->buttons[2];
+        ROS_INFO_STREAM("button_is_pressed: " << button_is_pressed);
+      }
+
     private:
       ros::NodeHandle _nh;
       ros::Publisher _pub;
+
+      //New code start ---------------
+      bool button_is_pressed;
+      ros::Subscriber button_sub;
+      //New code end ---------------------
+
 
       boost::thread _gst_thread;
 
@@ -220,8 +239,13 @@ namespace audio_transport
       int _bitrate, _channels, _depth, _sample_rate;
       GMainLoop *_loop;
       std::string _format;
+
+
   };
+
+
 }
+
 
 int main (int argc, char **argv)
 {
@@ -229,5 +253,6 @@ int main (int argc, char **argv)
   gst_init(&argc, &argv);
 
   audio_transport::RosGstCapture server;
+
   ros::spin();
 }
